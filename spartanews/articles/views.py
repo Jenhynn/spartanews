@@ -29,15 +29,15 @@ from .models import ContentInfo, CommentInfo
 
 
 # Custom API exception class when request with unavailable query params
-class InvalidQueryParamsException(APIException):
+class InvalidQueryParamsException(APIException): # exception 모델 상속 받아서 커스텀한 것 overriding
     status_code = status.HTTP_406_NOT_ACCEPTABLE
     default_detail = "Your request contain invalid query parameters."
 
 
 # Custom pagination class for articles list
-class ArticlesListPagination(PageNumberPagination):
+class ArticlesListPagination(PageNumberPagination): # 페이지네이션 커스텀
     page_size = 20
-    page_size_query_param = 'page_size'
+    page_size_query_param = 'page_size' # 20에서 100 사이로
     max_page_size = 100
 
 
@@ -49,19 +49,19 @@ class CommentsListPagination(PageNumberPagination):
 
 
 class ContentListAPIView(generics.ListAPIView):
-    serializer_class = ContentAllSerializer
-    pagination_class = ArticlesListPagination
-    permission_classes = [IsAuthenticatedOrReadOnly]
+    serializer_class = ContentAllSerializer # serializers.py에서 상속
+    pagination_class = ArticlesListPagination # 페이지네이션 구현 custom pagination을 함
+    permission_classes = [IsAuthenticatedOrReadOnly] 
 
-    def get_queryset(self):
-        query_params = self.request.query_params
+    def get_queryset(self): #
+        query_params = self.request.query_params # 쿼리 파라미터 담기
 
         # value of ordering query string
-        order_by = query_params.get("order-by")
+        order_by = query_params.get("order-by") # 꺼내기
 
         # value of filtering query string
-        favorite_by = query_params.get("favorite-by")
-        liked_by = query_params.get("liked-by")
+        favorite_by = query_params.get("favorite-by") #UserInfo로
+        liked_by = query_params.get("liked-by") #UserInfo로
         user = query_params.get("user")
 
         # Filtering
@@ -70,7 +70,7 @@ class ContentListAPIView(generics.ListAPIView):
         # UserInfo.favorite_contents
         if favorite_by:
             if favorite_by.isdecimal():
-                rows = get_user_model().objects.get(pk=int(favorite_by)).favorite_contents.filter(is_visible=True)
+                rows = get_user_model().objects.get(pk=int(favorite_by)).favorite_contents.filter(is_visible=True) # 그 유저가 즐찾한 글을 모두 들고와서 거기에서 favorite 컨텐츠를 뽑고 존재(is_visible=True) 하는 걸 불러오기
             else:
                 raise InvalidQueryParamsException
         # check 'liked_by' query string
@@ -84,21 +84,23 @@ class ContentListAPIView(generics.ListAPIView):
         # ContentInfo
         elif user:
             if user.isdecimal():
-                rows = ContentInfo.objects.filter(is_visible=True, userinfo_id=int(user))
+                rows = ContentInfo.objects.filter(is_visible=True, userinfo_id=int(user)) 
             else:
                 raise InvalidQueryParamsException
         # no query string
         # ContentInfo
         else:
-            rows = ContentInfo.objects.filter(is_visible=True)
+            rows = ContentInfo.objects.filter(is_visible=True) # 모든 content를 불러옴
 
         # annotate fields: 'comment_count', 'like_count', 'article_point'
         # annotate but not include in serialized data: 'duration_in_microseconds', 'duration'
         # duration_in_microseconds is divided by (1000 * 1000 * 60 * 60 * 24)
         # because of converting microseconds to days
+
+        # duration Extract 사용은 duration... extract 는 장고의 기능임. duration_in_microseconds로 변환
         rows = rows.annotate(
-            comment_count=Count(F("comments_on_content")),
-            like_count=Count(F("liked_by")),
+            comment_count=Count(F("comments_on_content")), # 역참조 CommentInfo에서 역참조 매니저 명
+            like_count=Count(F("liked_by")), # 역참조 UserInfo에서 역참조 매니저명
             duration_in_microseconds=ExpressionWrapper(
                 Cast(timezone.now().replace(microsecond=0), DateTimeField()) - F("create_dt"),
                 output_field=DurationField()
@@ -109,25 +111,26 @@ class ContentListAPIView(generics.ListAPIView):
                     F('duration_in_microseconds') / (1000 * 1000 * 60 * 60 * 24),
                     function='FLOOR',
                     template="%(function)s(%(expressions)s)"
-                ),
+                ), # microseconds -> days 로 변환 #Func(): 데이터베이스의 함수를 직접 작성해서 쓸 수 있게. 장고가 지원함.
                 output_field=IntegerField()
-            )
+            ) #// 여기까지는 SQLite의 한계로... 어쩔 수 없이 변환해서 씀
         ).annotate(
             article_point=ExpressionWrapper(
                 -5 * F("duration") + 3 * F("comment_count") + F("like_count"),
                 output_field=IntegerField()
             )
-        )
+        ) # 시리얼라이저로 반환해서 정렬하기 어려우므로 필드 추가를 해서 반환. 시리얼라이저에서 할지 뷰에서 할지 방법 중 뷰에서 하는 걸로 선택한 것.
+        # annotate의 좋은 점: 데이터베이스에는 포함이 안 됨. 임시로 필드를 생성해서.
 
         # Ordering
         # order-by=new: ORDER BY create_dt DESC
         # nothing: ORDER BY article_point DESC create_dt DESC
         if order_by == "new":
-            rows = rows.order_by("-create_dt")
+            rows = rows.order_by("-create_dt") # 최신순
         else:
             rows = rows.order_by("-article_point", "-create_dt")
 
-        return rows
+        return rows # queryset return
 
     def post(self, request):
         serializer = ContentSerializer(data=request.data)
@@ -209,15 +212,15 @@ class CommentListAPIView(generics.ListAPIView):
     pagination_class = CommentsListPagination
     permission_classes = [IsAuthenticatedOrReadOnly]
 
-    def get_queryset(self):
+    def get_queryset(self): #get_queryset은 파라미터를 받을 수 없음.
         # endpoint: /api/content/<int:content_id>/comment
         content_id = self.kwargs.get("content_id")
         # check 'content_id' parameter
         # CommentInfo
-        if content_id:
-            rows = CommentInfo.objects.filter(contentinfo_id=content_id, is_visible=True)
+        if content_id: #content_id가 있으면
+            rows = CommentInfo.objects.filter(contentinfo_id=content_id, is_visible=True) # 리스트에 담아서 주어야 해서 이렇게 함. QueryDict로
             # order by earliest
-            return rows.order_by("create_dt")
+            return rows.order_by("create_dt") # queryset으로 던지기 때문에 Response 안 씀
 
         # endpoint: /api/content/comment
         liked_by = self.request.GET.get("liked-by")
@@ -284,10 +287,11 @@ class CommentDetailAPIView(APIView):
         row.save()
         return Response(status=status.HTTP_204_NO_CONTENT)
 
+# FBV로 구현
 
 @api_view(["POST"])
 def content_favorite(request, content_id):
-    if request.user.is_authenticated:
+    if request.user.is_authenticated: # 한결 튜터님 피드백: 데코레이터로.. 해진님은 에러가 계속 발생해서 이렇게 처리하셨다고
         me = get_user_model().objects.get(id=request.user.id)
         content = get_object_or_404(ContentInfo, id=content_id)
 
